@@ -1,76 +1,141 @@
-#include "HX711.h"
+#include "Arduino.h"
 
-// Pin HX711
-#define DOUT_PIN  4
-#define SCK_PIN   5
+// ── Pin Sensor Hall (4x KY-003) ────────────
+#define HALL1_PIN  14
+#define HALL2_PIN  27
+#define HALL3_PIN  26
+#define HALL4_PIN  13
 
-HX711 scale;
+// ── Pin LED External ───────────────────────
+#define LED1_PIN   32
+#define LED2_PIN   33
+#define LED3_PIN   18
+#define LED4_PIN   19
 
-// Faktor kalibrasi - ubah nilai ini saat kalibrasi
-// Nilai positif atau negatif bergantung pada orientasi load cell
-float calibration_factor = -7050.0;
+// ── LED internal ───────────────────────────
+#define LED_INT     2    // ON bila mana-mana magnet aktif
+
+// ── DAC output ─────────────────────────────
+#define DAC_PIN    25    // voltan ikut bilangan magnet aktif
+
+// ── Konfigurasi ────────────────────────────
+#define DEBOUNCE_MS  30
+#define ACTIVE_LOW   true   // KY-003: LOW = magnet terdeteksi
+
+// ── Struct sensor ──────────────────────────
+struct HallSensor {
+  uint8_t  hall_pin;
+  uint8_t  led_pin;
+  bool     state;        // state stabil semasa
+  bool     raw_prev;     // bacaan sebelum debounce
+  uint32_t last_change;  // masa berubah terakhir
+};
+
+HallSensor sensors[] = {
+  {HALL1_PIN, LED1_PIN, false, false, 0},
+  {HALL2_PIN, LED2_PIN, false, false, 0},
+  {HALL3_PIN, LED3_PIN, false, false, 0},
+  {HALL4_PIN, LED4_PIN, false, false, 0},
+};
+const int NUM_SENSORS = 4;
+
+// Voltan output DAC ikut bilangan magnet aktif
+const float dac_volt[] = {0.00, 0.83, 1.65, 2.48, 3.30};
+const uint8_t dac_val[] = {0,   64,   128,  192,  255};
+
+void update_dac_led(int active_count) {
+  dacWrite(DAC_PIN, dac_val[active_count]);
+  digitalWrite(LED_INT, active_count > 0 ? HIGH : LOW);
+}
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("=== ESP32 Timbangan Digital ===");
-  Serial.println("Inisialisasi HX711...");
 
-  scale.begin(DOUT_PIN, SCK_PIN);
+  pinMode(LED_INT, OUTPUT);
+  digitalWrite(LED_INT, LOW);
+  dacWrite(DAC_PIN, 0);
 
-  if (!scale.is_ready()) {
-    Serial.println("ERROR: HX711 tidak terdeteksi! Periksa koneksi.");
-    while (1) delay(500);
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    pinMode(sensors[i].hall_pin, INPUT_PULLUP);
+    pinMode(sensors[i].led_pin,  OUTPUT);
+    digitalWrite(sensors[i].led_pin, LOW);
   }
 
-  Serial.println("HX711 siap.");
-  Serial.println("Mengatur tara (kosongkan timbangan)...");
-  delay(2000);
-
-  scale.set_scale(calibration_factor);
-  scale.tare(); // Reset ke 0 dengan kondisi kosong
-
-  Serial.println("Tara selesai. Timbangan siap digunakan.");
-  Serial.println("-------------------------------------");
-  Serial.println("Perintah Serial:");
-  Serial.println("  't' = Tara ulang (reset ke 0)");
-  Serial.println("  '+' = Naikkan calibration_factor sebesar 10");
-  Serial.println("  '-' = Turunkan calibration_factor sebesar 10");
-  Serial.println("-------------------------------------");
+  Serial.println("=== ESP32 Hall Sensor x4 Real-Time ===");
+  Serial.println("Sensor | GPIO Hall | GPIO LED");
+  Serial.println("   1   |   14     |   32");
+  Serial.println("   2   |   27     |   33");
+  Serial.println("   3   |   26     |   18");
+  Serial.println("   4   |   13     |   19");
+  Serial.println("DAC Output: GPIO 25");
+  Serial.println("--------------------------------------");
+  Serial.println("Perintah: 's' = status");
+  Serial.println("--------------------------------------");
 }
 
 void loop() {
-  // Baca perintah dari Serial Monitor
   if (Serial.available()) {
     char cmd = Serial.read();
-    if (cmd == 't' || cmd == 'T') {
-      scale.tare();
-      Serial.println("[TARA] Berat direset ke 0.");
-    } else if (cmd == '+') {
-      calibration_factor += 10;
-      scale.set_scale(calibration_factor);
-      Serial.print("[KALIBRASI] Factor: ");
-      Serial.println(calibration_factor);
-    } else if (cmd == '-') {
-      calibration_factor -= 10;
-      scale.set_scale(calibration_factor);
-      Serial.print("[KALIBRASI] Factor: ");
-      Serial.println(calibration_factor);
+    if (cmd == 's' || cmd == 'S') {
+      Serial.println("=== STATUS ===");
+      int cnt = 0;
+      for (int i = 0; i < NUM_SENSORS; i++) {
+        Serial.print("  Sensor "); Serial.print(i+1);
+        Serial.print(": "); Serial.println(sensors[i].state ? "MAGNET ON" : "tiada");
+        if (sensors[i].state) cnt++;
+      }
+      Serial.print("  Aktif: "); Serial.print(cnt);
+      Serial.print(" | DAC: "); Serial.print(dac_volt[cnt]);
+      Serial.println("V");
+      Serial.println("==============");
     }
   }
 
-  // Baca berat (rata-rata 10 pembacaan untuk stabilitas)
-  if (scale.is_ready()) {
-    float berat_gram = scale.get_units(10);
-    float berat_kg   = berat_gram / 1000.0;
+  int active_count = 0;
+  bool changed     = false;
 
-    Serial.print("Berat: ");
-    Serial.print(berat_gram, 1); // 1 desimal
-    Serial.print(" g  |  ");
-    Serial.print(berat_kg, 3);   // 3 desimal
-    Serial.println(" kg");
-  } else {
-    Serial.println("HX711 tidak siap, mencoba ulang...");
+  for (int i = 0; i < NUM_SENSORS; i++) {
+    bool raw      = digitalRead(sensors[i].hall_pin);
+    bool detected = ACTIVE_LOW ? (raw == LOW) : (raw == HIGH);
+
+    // Debounce
+    if (detected != sensors[i].raw_prev) {
+      sensors[i].last_change = millis();
+      sensors[i].raw_prev    = detected;
+    }
+
+    if ((millis() - sensors[i].last_change) >= DEBOUNCE_MS) {
+      if (detected != sensors[i].state) {
+        sensors[i].state = detected;
+        changed = true;
+
+        Serial.print("[S"); Serial.print(i+1); Serial.print("] ");
+        Serial.println(detected ? "MAGNET ON" : "OFF");
+      }
+    }
+
+    if (sensors[i].state) active_count++;
+    digitalWrite(sensors[i].led_pin, sensors[i].state ? HIGH : LOW);
   }
 
-  delay(500); // Baca setiap 0.5 detik
+  if (changed) {
+    update_dac_led(active_count);
+    Serial.print(">> Aktif: "); Serial.print(active_count);
+    Serial.print(" | DAC: "); Serial.print(dac_volt[active_count]);
+    Serial.println("V");
+  }
+
+  // Output untuk plotter
+  static uint32_t last_plot = 0;
+  if (millis() - last_plot >= 100) {
+    last_plot = millis();
+    Serial.print("HALL|");
+    Serial.print(sensors[0].state ? 1 : 0); Serial.print("|");
+    Serial.print(sensors[1].state ? 1 : 0); Serial.print("|");
+    Serial.print(sensors[2].state ? 1 : 0); Serial.print("|");
+    Serial.print(sensors[3].state ? 1 : 0); Serial.print("|");
+    Serial.println(active_count);
+  }
+
+  delay(5);
 }

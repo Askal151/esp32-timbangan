@@ -11,6 +11,8 @@ if "%1"=="um"      goto um
 if "%1"=="clean"   goto clean
 if "%1"=="ports"   goto ports
 if "%1"=="libs"    goto libs
+if "%1"=="plot"    goto plot
+if "%1"=="analyze" goto analyze
 if "%1"=="kill"    goto kill
 if "%1"=="help"    goto help
 if not "%1"==""    goto unknown
@@ -29,6 +31,8 @@ echo   um        - Upload + terus buka monitor
 echo   clean     - Padam hasil build
 echo   ports     - Senarai port COM yang ada
 echo   libs      - Pasang semula library
+echo   plot      - Buka real-time graf potensio
+echo   analyze   - Analisa dan replay data log CSV
 echo   kill      - Kill semua proses yang pegang port COM
 echo.
 echo  Guna:  pio.bat ^<arahan^>
@@ -43,6 +47,8 @@ if "%CMD%"=="um"      goto um
 if "%CMD%"=="clean"   goto clean
 if "%CMD%"=="ports"   goto ports
 if "%CMD%"=="libs"    goto libs
+if "%CMD%"=="plot"    goto plot
+if "%CMD%"=="analyze" goto analyze
 if "%CMD%"=="kill"    goto kill
 echo [ERROR] Arahan tidak sah.
 goto end
@@ -114,6 +120,18 @@ goto end
 echo.
 echo [LIBS] Memasang semula library...
 "%PIO%" lib install
+goto end
+
+:plot
+echo.
+echo [PLOT] Membuka real-time graf...
+python "%~dp0plotter.py"
+goto end
+
+:analyze
+echo.
+echo [ANALYZE] Membuka analyzer...
+python "%~dp0analyzer.py"
 goto end
 
 :kill
