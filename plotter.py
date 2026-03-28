@@ -294,7 +294,10 @@ right.addWidget(lbl_led_count)
 right.addWidget(msep())
 
 right.addWidget(mlbl('KALIBRASI', 10, '#888', bold=True))
-btn_cal = QtWidgets.QPushButton('⟳  Baseline (tanpa magnet)')
+btn_auto = QtWidgets.QPushButton('⚡  AUTO Kalibrasi (2 langkah)')
+btn_auto.setStyleSheet(bstyle('#8e44ad'))
+right.addWidget(btn_auto)
+btn_cal = QtWidgets.QPushButton('⟳  Baseline sahaja')
 btn_cal.setStyleSheet(bstyle('#2980b9'))
 right.addWidget(btn_cal)
 
@@ -321,6 +324,13 @@ for i in range(4):
     lbl_thresh.append(l)
 right.addWidget(msep())
 
+def do_auto_calibrate():
+    try:
+        ser.write(b'a')
+        lbl_cal_info.setText('AUTO: jauhkan magnet dulu (2s)...')
+    except Exception:
+        pass
+
 def do_calibrate():
     try:
         ser.write(b'c')
@@ -337,6 +347,7 @@ def make_cal_magnet(n):
             pass
     return fn
 
+btn_auto.clicked.connect(do_auto_calibrate)
 btn_cal.clicked.connect(do_calibrate)
 for i, btn in enumerate(btn_mags):
     btn.clicked.connect(make_cal_magnet(i + 1))

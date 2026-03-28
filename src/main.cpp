@@ -25,7 +25,7 @@ Preferences prefs;
 Adafruit_ADS1015 ads;
 
 // ── Variabel global ──────────────────────────
-int baseline     = 2048;
+int baseline     = 0;    // 0 = belum dikalibrasi, akan auto-set di setup()
 int thresh[4]    = {82, 329, 720, 1049};
 int adc_val      = 0;
 int deviation    = 0;
@@ -68,7 +68,7 @@ void set_leds(int count) {
 }
 
 void save_thresholds() {
-    prefs.begin("hall", false);
+    prefs.begin("hall2", false);
     prefs.putInt("t0", thresh[0]);
     prefs.putInt("t1", thresh[1]);
     prefs.putInt("t2", thresh[2]);
@@ -78,13 +78,50 @@ void save_thresholds() {
 }
 
 void load_thresholds() {
-    prefs.begin("hall", true);
+    prefs.begin("hall2", true);
     thresh[0] = prefs.getInt("t0",  82);
     thresh[1] = prefs.getInt("t1", 329);
     thresh[2] = prefs.getInt("t2", 720);
     thresh[3] = prefs.getInt("t3", 1049);
-    baseline  = prefs.getInt("base", 2048);
+    baseline  = prefs.getInt("base", 0);   // 0 = belum ada NVS
     prefs.end();
+}
+
+// Auto-kalibrasi: baseline tanpa magnet → max deviasi dengan magnet
+// Sebar 4 threshold pada 20%, 40%, 65%, 82% dari max_dev
+void auto_calibrate() {
+    Serial.println("[AUTO] Langkah 1/2 — Jauhkan semua magnet...");
+    delay(2000);
+    baseline = read_adc_avg(128);
+    Serial.print("[AUTO] Baseline: "); Serial.println(baseline);
+
+    Serial.println("[AUTO] Langkah 2/2 — Letak magnet PALING DEKAT ke sensor...");
+    delay(3000);
+    int val     = read_adc_avg(128);
+    int max_dev = abs(val - baseline);
+
+    if (max_dev < NOISE_FLOOR * 3) {
+        Serial.println("[AUTO] ERROR: Deviasi terlalu kecil! Pastikan magnet menempel.");
+        return;
+    }
+
+    // Sebar threshold pada 20%, 40%, 65%, 82% dari max_dev
+    thresh[0] = max(NOISE_FLOOR + 5, (int)(max_dev * 0.20));
+    thresh[1] = (int)(max_dev * 0.40);
+    thresh[2] = (int)(max_dev * 0.65);
+    thresh[3] = (int)(max_dev * 0.82);
+
+    save_thresholds();
+
+    Serial.print("[AUTO] ADC max: "); Serial.print(val);
+    Serial.print(" | Dev max: "); Serial.println(max_dev);
+    Serial.print("[THRESH] ");
+    for (int i = 0; i < 4; i++) {
+        Serial.print(thresh[i]);
+        if (i < 3) Serial.print("|");
+    }
+    Serial.println();
+    Serial.println("[AUTO] Kalibrasi selesai! Cuba dekatkan magnet perlahan.");
 }
 
 void calibrate_baseline() {
@@ -168,14 +205,22 @@ void setup() {
 
     load_thresholds();
 
+    // Jika belum ada baseline di NVS, auto-set dari bacaan semasa
+    if (baseline == 0) {
+        baseline = read_adc_avg(64);
+        Serial.print("[INIT] Baseline auto-set: "); Serial.println(baseline);
+        save_thresholds();
+    }
+
     Serial.println("=== ESP32 + ADS1015 I2C → SS49E → LED Bar ===");
     Serial.println("I2C  : SDA=21 | SCL=22");
     Serial.print("ADS  : addr=0x"); Serial.print(ADS_ADDR, HEX);
     Serial.print(" | channel=A"); Serial.println(HALL_CH);
     Serial.println("LED  : GPIO 32, 33, 18, 19");
     Serial.println("Perintah:");
-    Serial.println("  c  = kalibrasi baseline (tanpa magnet)");
-    Serial.println("  1~4 = kalibrasi N magnet");
+    Serial.println("  a  = AUTO kalibrasi (baseline + max magnet)  ← GUNA INI DULU");
+    Serial.println("  c  = kalibrasi baseline sahaja");
+    Serial.println("  1~4 = kalibrasi N magnet manual");
     Serial.println("  s  = status");
     Serial.println("  r  = reset threshold ke default");
     Serial.println("----------------------------------------------");
@@ -192,6 +237,7 @@ void loop() {
     if (Serial.available()) {
         char cmd = Serial.read();
         switch (cmd) {
+            case 'a': case 'A': auto_calibrate(); break;
             case 'c': case 'C': calibrate_baseline(); break;
             case '1': calibrate_magnet(1); break;
             case '2': calibrate_magnet(2); break;
