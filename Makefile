@@ -1,4 +1,5 @@
-PIO := $(shell which pio 2>/dev/null || echo /home/manticore/.platformio/penv/bin/pio)
+PIO    := $(shell which pio 2>/dev/null || echo /home/manticore/.platformio/penv/bin/pio)
+PYTHON := $(shell test -f /home/manticore/.platformio/penv/bin/python3 && echo /home/manticore/.platformio/penv/bin/python3 || echo python3)
 
 # Auto detect ESP32 port (CP210x, CH340, CH341, FTDI) - utamakan ttyUSB/ttyACM
 ESP_PORT := $(shell $(PIO) device list 2>/dev/null | grep -B5 -E 'CP210|CH340|CH341|FTDI' | grep -E '^/dev/tty(USB|ACM)' | head -1)
@@ -67,12 +68,12 @@ libs:
 plot:
 	@echo ""
 	@echo "[PLOT] Membuka real-time graf..."
-	python3 plotter.py
+	$(PYTHON) plotter.py
 
 analyze:
 	@echo ""
 	@echo "[ANALYZE] Membuka analyzer..."
-	python3 analyzer.py
+	$(PYTHON) analyzer.py
 
 kill:
 	@echo ""
